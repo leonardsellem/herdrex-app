@@ -161,8 +161,7 @@ struct View {
 
 enum Op {
     Input(Vec<u8>),
-    /// `claim`: become the block's owner, so the size applies even while Rex.app shows it.
-    Size { cols: u64, rows: u64, claim: bool },
+    Size { cols: u64, rows: u64 },
     Focus(bool),
     Facts(Value),
 }
@@ -692,9 +691,10 @@ impl Bridge {
         };
         if !observe {
             let _ = ops.send(Op::Facts(p["display"].clone()));
-            // The app attaches at the size the terminal has; don't take it from Rex.app.
+            // As with herdr-core, the viewer that attaches sets the size: the
+            // app draws the terminal at its pane's size, whoever else shows it.
             if let (Some(cols), Some(rows)) = (p["cols"].as_u64(), p["rows"].as_u64()) {
-                let _ = ops.send(Op::Size { cols, rows, claim: false });
+                let _ = ops.send(Op::Size { cols, rows });
             }
         }
         let b = self.clone();
@@ -858,7 +858,6 @@ impl Bridge {
             RESIZE if payload.len() >= 4 => Op::Size {
                 cols: u16::from_le_bytes([payload[0], payload[1]]) as u64,
                 rows: u16::from_le_bytes([payload[2], payload[3]]) as u64,
-                claim: true,
             },
             FOCUS => Op::Focus(payload.first() == Some(&1)),
             FACTS => Op::Facts(serde_json::from_slice(&payload).unwrap_or(Value::Null)),
@@ -870,6 +869,9 @@ impl Bridge {
     }
 
     /// Typing, size and colors for one attach, in the order the app sent them.
+    /// Rex sizes a block for its owner, so the app takes the block whenever
+    /// herdr-core would make it the active viewer: on attach, resize, focus
+    /// and typing (Rex.app may have taken it since).
     fn ops(&self, session: &str, block: &str, rx: mpsc::Receiver<Op>, observe: bool) {
         let block_call = |method: &str, args: Value| {
             if let Err(e) = self.rex.block_call(session, block, &format!("{TERMINAL}.{method}"), args) {
@@ -879,18 +881,20 @@ impl Bridge {
         let own = || {
             let _ = self.rex.call("session.own_block", json!({"session_id": session, "block_ids": [block], "mode": "take"}));
         };
-        let (mut owned, mut cell): (bool, Option<(u64, u64)>) = (false, None);
+        let mut cell: Option<(u64, u64)> = None;
+        // When typing last took the block: a burst of keys takes it once.
+        let mut owned_at: Option<Instant> = None;
         while let Ok(first) = rx.recv() {
             let mut batch = vec![first];
             batch.extend(rx.try_iter());
             let mut typed: Vec<u8> = Vec::new();
-            let flush = |typed: &mut Vec<u8>, owned: &mut bool| {
+            let flush = |typed: &mut Vec<u8>, owned_at: &mut Option<Instant>| {
                 if typed.is_empty() {
                     return;
                 }
-                if !*owned {
+                if owned_at.is_none_or(|at| at.elapsed() > Duration::from_millis(500)) {
                     own();
-                    *owned = true;
+                    *owned_at = Some(Instant::now());
                 }
                 block_call("write", json!({"data": String::from_utf8_lossy(typed)}));
                 typed.clear();
@@ -901,12 +905,10 @@ impl Bridge {
                 }
                 match op {
                     Op::Input(bytes) => typed.extend(bytes),
-                    Op::Size { cols, rows, claim } => {
-                        flush(&mut typed, &mut owned);
-                        if claim && !owned {
-                            own();
-                            owned = true;
-                        }
+                    Op::Size { cols, rows } => {
+                        flush(&mut typed, &mut owned_at);
+                        own();
+                        owned_at = Some(Instant::now());
                         let mut args = json!({"columns": cols, "rows": rows});
                         if let Some((w, h)) = cell {
                             args["cell_width_px"] = json!(w);
@@ -915,10 +917,10 @@ impl Bridge {
                         block_call("resize", args);
                     }
                     Op::Focus(focused) => {
-                        flush(&mut typed, &mut owned);
+                        flush(&mut typed, &mut owned_at);
                         if focused {
                             own();
-                            owned = true;
+                            owned_at = Some(Instant::now());
                         }
                         let _ = self.rex.call("block.event", json!({"session_id": session, "block_id": block, "event": {"type": "focus", "payload": {"focused": focused}}}));
                     }
@@ -936,7 +938,7 @@ impl Bridge {
                     }
                 }
             }
-            flush(&mut typed, &mut owned);
+            flush(&mut typed, &mut owned_at);
         }
     }
 }
