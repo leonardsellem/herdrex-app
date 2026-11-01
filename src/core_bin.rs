@@ -16,6 +16,29 @@ use std::time::Duration;
 mod cli_link;
 
 static BIN: OnceLock<PathBuf> = OnceLock::new();
+/// Arguments before the core's own (`rex-core` when the app is its own core).
+static PREFIX: OnceLock<Vec<String>> = OnceLock::new();
+
+/// This build runs its terminals on Rex (`herdr-app rex-core`, src/rex/)
+/// unless HERDR_APP_BACKEND=herdr-core asks for herdr-core.
+pub fn rex_backend() -> bool {
+    cfg!(unix) && std::env::var("HERDR_APP_BACKEND").map_or(true, |b| b != "herdr-core")
+}
+
+/// Uses this app's own Rex bridge as the core.
+pub fn use_rex() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let _ = PREFIX.set(vec!["rex-core".into()]);
+    let _ = BIN.set(exe);
+    Ok(())
+}
+
+/// The core's command line so far: add its arguments (`connect`).
+pub fn command() -> Command {
+    let mut cmd = crate::spawn::command(path());
+    cmd.args(PREFIX.get().into_iter().flatten());
+    cmd
+}
 
 #[cfg(target_os = "macos")]
 pub fn install_cli_link() {

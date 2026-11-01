@@ -23,6 +23,8 @@ mod mod_files;
 mod process_cwd;
 mod programs;
 mod remote_shell;
+#[cfg(unix)]
+mod rex;
 mod settings;
 mod setup;
 mod sound;
@@ -54,9 +56,10 @@ Usage:
   herdr-app --skill                Agent Skill: driving the window, and where hc fits
   herdr-app --version
 
-The terminals run in herdr-core (`hc`), which keeps them alive when the
-window closes. `hc --help`: start, read, wait on and talk to terminals and
-agents. The app shows them and arranges them in spaces and tabs.
+The terminals run on a Rex server (`herdr-app rex-core` serves herdr-core's
+protocol from it), which keeps them alive when the window closes. Spaces are
+Rex sessions and tabs are their tabs: change either side and the other follows.
+HERDR_APP_BACKEND=herdr-core runs herdr-core (`hc`) instead.
 
 Home: ~/.config/herdr-app (HERDR_APP_HOME picks another).
 ";
@@ -79,6 +82,11 @@ fn main() {
     #[cfg(windows)]
     if args.len() > 1 {
         attach_console();
+    }
+    // `herdr-app rex-core connect`: the core this app runs, serving herdr-core's protocol from Rex.
+    #[cfg(unix)]
+    if args.get(1).map(String::as_str) == Some("rex-core") {
+        std::process::exit(rex::main(&args[2..]));
     }
     // `herdr-app check <mod>` / `herdr-app types <mod>`: gpui-shell's own checker, with Herdr's module installed.
     if matches!(args.get(1).map(String::as_str), Some("check" | "types")) {
@@ -122,16 +130,24 @@ fn main() {
     // The core people installed; without one, the setup screen installs it.
     let person = settings::load_person();
     let configured = person.as_ref().ok().and_then(|p| p.core.clone());
-    let core: Result<std::sync::Arc<hc::Core>, setup::Need> = match core_bin::find(configured.as_deref()) {
-        None => Err(setup::Need::Install),
-        Some(bin) => {
-            core_bin::use_core(bin);
-            match hc::Core::connect() {
-                // One that can't serve this app gets the screen that fixes it.
-                Ok(core) => hc::check(&core.hello).map(|()| core).map_err(setup::Need::Fix),
-                Err(e) => {
-                    eprintln!("herdr-app: {e:#}");
-                    Err(setup::Need::Install)
+    let core: Result<std::sync::Arc<hc::Core>, setup::Need> = if core_bin::rex_backend() {
+        // This app is its own core: `rex-core` serves herdr-core's protocol from Rex.
+        core_bin::use_rex().map_err(anyhow::Error::from).and_then(|()| hc::Core::connect()).map_err(|e| {
+            eprintln!("herdr-app: {e:#}");
+            setup::Need::Rex(format!("{e:#}"))
+        })
+    } else {
+        match core_bin::find(configured.as_deref()) {
+            None => Err(setup::Need::Install),
+            Some(bin) => {
+                core_bin::use_core(bin);
+                match hc::Core::connect() {
+                    // One that can't serve this app gets the screen that fixes it.
+                    Ok(core) => hc::check(&core.hello).map(|()| core).map_err(setup::Need::Fix),
+                    Err(e) => {
+                        eprintln!("herdr-app: {e:#}");
+                        Err(setup::Need::Install)
+                    }
                 }
             }
         }
