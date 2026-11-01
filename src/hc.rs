@@ -230,7 +230,7 @@ pub struct Attached {
     pub terminal: Value,
 }
 
-fn encode(channel: u32, kind: u8, payload: &[u8]) -> Vec<u8> {
+pub fn encode(channel: u32, kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER + payload.len());
     out.extend_from_slice(&channel.to_le_bytes());
     out.push(kind);
@@ -239,7 +239,7 @@ fn encode(channel: u32, kind: u8, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn read_frame(r: &mut impl Read) -> Option<(u32, u8, Vec<u8>)> {
+pub fn read_frame(r: &mut impl Read) -> Option<(u32, u8, Vec<u8>)> {
     let mut h = [0u8; HEADER];
     r.read_exact(&mut h).ok()?;
     let channel = u32::from_le_bytes(h[0..4].try_into().unwrap());
@@ -252,7 +252,7 @@ fn read_frame(r: &mut impl Read) -> Option<(u32, u8, Vec<u8>)> {
 impl Core {
     /// Connects to the user's core (starting it if needed) and switches to framed mode.
     pub fn connect() -> Result<Arc<Core>> {
-        let mut child = crate::spawn::command(crate::core_bin::path())
+        let mut child = crate::core_bin::command()
             .arg("connect")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -266,7 +266,10 @@ impl Core {
         reader.read_line(&mut line)?;
         let hello: Value = serde_json::from_str(&line).context("bad hello reply from core")?;
         if let Some(err) = hello.get("error") {
-            bail!("core refused hello: {err}");
+            match err.get("message").and_then(Value::as_str) {
+                Some(message) => bail!("{message}"),
+                None => bail!("core refused hello: {err}"),
+            }
         }
 
         let (writer, frames) = mpsc::channel::<Vec<u8>>();

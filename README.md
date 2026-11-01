@@ -2,6 +2,20 @@
 
 Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
 
+## This fork: Rex backend
+
+This build runs its terminals on a [Rex](https://www.superlogical.com/rex/docs) server instead of herdr-core.
+The app starts `herdr-app rex-core connect`, which speaks herdr-core's `hc connect` protocol to the window and Rex's control and data WebSockets to the server ([src/rex](src/rex)).
+
+- Rex must be running: open Rex for Mac, or `rex server start`. The bridge finds the server with `rex whoami`; `REX_SERVER=unix:///path/to/server.sock` picks one.
+- Rex holds the layout. A Herdr space is a Rex session, its tabs are the session's tabs, and its splits are Rex's splits. Change either side and the other follows: sessions made in Rex.app show up as spaces.
+- Every Rex terminal is a Herdr terminal. Agents in your Rex sessions that report status (OSC 7501) show in the agents sidebar; click one to peek at it.
+- Terminals keep running when the window closes. Ones started outside any space wait in a Rex session named `herdr`.
+- What Rex has no place for (terminal addresses and labels, a space's folder, mod panels, pane sizes) lives in `rex/` in the app's home.
+- Rex can't move a terminal from one session to another, so a pane dragged to another space goes back. Pane sizes don't sync either way; floating Rex panes aren't shown.
+- Not supported yet: other machines (`--on`, Settings → Machines), `hc` CLI commands, file drops onto remote terminals.
+- `HERDR_APP_BACKEND=herdr-core` runs herdr-core as upstream does.
+
 ## Install
 
 ### Linux and macOS

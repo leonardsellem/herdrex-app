@@ -30,6 +30,8 @@ const CORE_PLACE: &str = if cfg!(windows) { r"%LOCALAPPDATA%\Programs\herdr-core
 pub enum Need {
     Install,
     Fix(Mismatch),
+    /// The Rex backend couldn't reach a Rex server: why.
+    Rex(String),
 }
 
 enum State {
@@ -75,6 +77,7 @@ impl Setup {
                     self.state = State::Ready;
                 }
             },
+            Err(e) if crate::core_bin::rex_backend() => self.state = State::Failed(format!("{e:#}")),
             Err(e) => self.state = State::Failed(format!("herdr-core is there but didn't start: {e:#}")),
         }
         cx.notify();
@@ -155,6 +158,11 @@ impl Setup {
                 format!("Your herdr-core speaks a newer protocol (generation {generation}) than this Herdr understands. Update Herdr; your terminals keep running."),
                 format!("Update Herdr: {APP_INSTALL}"),
             ),
+            Need::Rex(why) => (
+                "Herdr needs a Rex server".into(),
+                format!("This Herdr runs its terminals on Rex, and couldn't reach a Rex server: {why}"),
+                "Open Rex, or start its server with `rex server start`, then try again. REX_SERVER=unix:///path/to/server.sock picks a server.".into(),
+            ),
         }
     }
 }
@@ -193,6 +201,11 @@ impl Render for Setup {
                 .flex()
                 .gap(px(10.0))
                 .child(button("update", "Update herdr-core", true).when(!busy, |d| d.on_click(cx.listener(|this, _, w, cx| this.update(w, cx))))),
+            Need::Rex(_) => div()
+                .flex()
+                .gap(px(10.0))
+                .child(button("retry", "Try again", true).when(!busy, |d| d.on_click(cx.listener(|this, _, w, cx| this.start(w, cx)))))
+                .child(button("quit", "Quit", false).on_click(cx.listener(|_, _, _, cx| cx.quit()))),
         };
         div()
             .size_full()
