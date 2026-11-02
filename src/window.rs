@@ -2120,6 +2120,7 @@ impl AppWindow {
                 .get(addr)
                 .cloned()
                 .or_else(|| rec.and_then(|r| r.get("foreground").and_then(|f| f.get("cwd")).or_else(|| r.get("cwd"))).and_then(Value::as_str).map(str::to_owned))
+                .filter(|c| !c.is_empty())
                 .unwrap_or_else(|| mods::home().to_string_lossy().into_owned());
             let active = self.model.active.clone();
             self.model.add_space(space, "", &folder, new_ctx);
@@ -2162,7 +2163,10 @@ impl AppWindow {
                 .map(str::to_owned)
                 // (a pid on another machine means nothing here)
                 .or_else(|| rec.get("pid").and_then(Value::as_u64).filter(|_| !addr.contains('/')).and_then(crate::process_cwd::read).map(|p| p.to_string_lossy().into_owned()))
-                .or_else(|| rec.get("cwd").and_then(Value::as_str).map(str::to_owned));
+                .or_else(|| rec.get("cwd").and_then(Value::as_str).map(str::to_owned))
+                // A core that has no folder yet (a Rex terminal before its
+                // shell starts) says "": not a folder to run git in.
+                .filter(|c| !c.is_empty());
             let Some(cwd) = cwd else { continue };
             let busy = busy(rec);
             let last = self.folders_checked.get_mut(addr);
