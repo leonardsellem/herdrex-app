@@ -240,11 +240,17 @@ impl Model {
         if !p.name.is_empty() {
             return p.name.clone();
         }
+        folder_name(&self.space_folder(p), home)
+    }
+
+    /// Where a space is now: its first terminal's folder (a worktree's own
+    /// folder, else the folder), else the folder it was made in.
+    pub fn space_folder(&self, p: &Space) -> String {
         let first = p.tabs.iter().flat_map(|c| c.root.terminals()).next();
         let folder = first
             .and_then(|n| n.terminal().and_then(|a| self.folder_info.get(a)).map(|f| f.top.clone()).or_else(|| self.pane_folders.get(&n.id).cloned()))
             .unwrap_or_else(|| p.folder.clone());
-        folder_name(&folder, home)
+        folder
     }
 
     /// What a tab is called: its name, else its place in its space (1, 2, ...).
@@ -601,7 +607,9 @@ pub fn space_json(m: &Model, p: &Space, index: usize, branch: Option<&str>, home
         "index": index + 1,
         "name": m.space_name(p, home),
         "named": !p.name.is_empty(),
-        "folder": p.folder,
+        // A space adopted before its core knew a folder ("") tells mods where
+        // its terminals are, not that it has no folder.
+        "folder": if p.folder.is_empty() { m.space_folder(p) } else { p.folder.clone() },
         "machine": p.machine,
         "branch": branch,
         "active": m.active.as_deref() == Some(&p.id),
