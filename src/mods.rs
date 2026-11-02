@@ -755,19 +755,24 @@ const EXEC_LIMIT: Duration = Duration::from_secs(30);
 const EXEC_OUTPUT: u64 = 8 << 20;
 
 /// Where a mod's program runs: its folder when that is there, else the app's.
-/// A folder that isn't there can't be a working directory: spawning there
-/// fails with ENOENT, as if the program were missing (a space whose folder was
-/// deleted, a terminal that has not reported one yet). herdr-core runs such a
-/// program where it is.
-fn work_dir(cwd: Option<String>) -> PathBuf {
-    cwd.map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(home)
+/// No folder (a terminal that has not reported one yet) means the app's: it
+/// can't be a working directory, and spawning there fails with ENOENT as if
+/// the program were missing. A folder that was asked for and isn't here is a
+/// different thing (another machine's folder, or one that is gone): say so,
+/// rather than run somewhere the mod didn't ask for.
+fn work_dir(cwd: Option<String>) -> Result<PathBuf, String> {
+    match cwd.filter(|c| !c.is_empty()) {
+        None => Ok(home()),
+        Some(c) if Path::new(&c).is_dir() => Ok(PathBuf::from(c)),
+        Some(c) => Err(format!("no folder {c} here")),
+    }
 }
 
 fn run_blocking(command: &str, args: &[String], cwd: Option<String>) -> Result<(i32, String, String), String> {
     use std::io::Read;
     let mut child = crate::spawn::command(command)
         .args(args)
-        .current_dir(work_dir(cwd))
+        .current_dir(work_dir(cwd)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1508,12 +1513,14 @@ mod tests {
     #[test]
     fn a_mods_program_runs_in_a_folder_that_is_there() {
         let here = std::env::current_dir().unwrap();
-        assert_eq!(work_dir(Some(here.to_string_lossy().into_owned())), here);
-        // What a Rex terminal reports before its shell starts, and a folder
-        // that is gone: both used to fail the spawn with "No such file or
-        // directory", naming the program instead of the folder.
-        for bad in [None, Some(String::new()), Some("/nonexistent-herdr-folder".into())] {
-            assert_eq!(work_dir(bad), home());
+        assert_eq!(work_dir(Some(here.to_string_lossy().into_owned())), Ok(here));
+        // What a Rex terminal reports before its shell starts: the app's folder
+        // (an empty one used to fail the spawn with "No such file or
+        // directory", naming the program instead of the folder).
+        for none in [None, Some(String::new())] {
+            assert_eq!(work_dir(none), Ok(home()));
         }
+        // A folder this machine doesn't have is named, not swapped for home.
+        assert_eq!(work_dir(Some("/nonexistent-herdr-folder".into())), Err("no folder /nonexistent-herdr-folder here".into()));
     }
 }
