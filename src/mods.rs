@@ -754,11 +754,20 @@ fn opt_str(v: Option<&HostValue>, key: &str) -> Option<String> {
 const EXEC_LIMIT: Duration = Duration::from_secs(30);
 const EXEC_OUTPUT: u64 = 8 << 20;
 
+/// Where a mod's program runs: its folder when that is there, else the app's.
+/// A folder that isn't there can't be a working directory: spawning there
+/// fails with ENOENT, as if the program were missing (a space whose folder was
+/// deleted, a terminal that has not reported one yet). herdr-core runs such a
+/// program where it is.
+fn work_dir(cwd: Option<String>) -> PathBuf {
+    cwd.map(PathBuf::from).filter(|p| p.is_dir()).unwrap_or_else(home)
+}
+
 fn run_blocking(command: &str, args: &[String], cwd: Option<String>) -> Result<(i32, String, String), String> {
     use std::io::Read;
     let mut child = crate::spawn::command(command)
         .args(args)
-        .current_dir(cwd.map(PathBuf::from).unwrap_or_else(home))
+        .current_dir(work_dir(cwd))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1494,5 +1503,17 @@ mod tests {
         assert_eq!(read("d/notes.md"), "my notes", "a dropped default with an added file stays");
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_mods_program_runs_in_a_folder_that_is_there() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(work_dir(Some(here.to_string_lossy().into_owned())), here);
+        // What a Rex terminal reports before its shell starts, and a folder
+        // that is gone: both used to fail the spawn with "No such file or
+        // directory", naming the program instead of the folder.
+        for bad in [None, Some(String::new()), Some("/nonexistent-herdr-folder".into())] {
+            assert_eq!(work_dir(bad), home());
+        }
     }
 }
